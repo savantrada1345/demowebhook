@@ -1,0 +1,25 @@
+{
+  "name": "webhook-tester",
+  "version": "1.0.0",
+  "description": "Zero-dependency external webhook receiver and test harness for Halo outbound webhooks",
+  "type": "module",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
+    "test": "node scripts/simulate-webhooks.mjs",
+    "simulate": "node scripts/simulate-webhooks.mjs",
+    "tunnel": "ngrok http 5055",
+    "generate-certs": "node scripts/generate-certs.mjs"
+  },
+  "dependencies": {},
+  "keywords": [
+    "halo",
+    "webhooks",
+    "testing",
+    "hmac-sha256",
+    "availability"
+  ],
+  "author": "",
+  "license": "ISC"
+}

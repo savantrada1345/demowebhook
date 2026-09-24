@@ -75,11 +75,7 @@ async function handleRequest(req, res) {
           status_code: verification.statusCode,
           signature_valid: false,
           error: verification.error,
-          headers: {
-            "x-altis-timestamp": verification.timestamp,
-            "x-altis-signature": verification.signature,
-            "user-agent": req.headers["user-agent"],
-          },
+          headers: req.headers,
         });
         sendJson(res, verification.statusCode, { error: verification.error });
         return;
@@ -96,10 +92,7 @@ async function handleRequest(req, res) {
           status_code: 400,
           signature_valid: true,
           error: errorMsg,
-          headers: {
-            "x-altis-timestamp": verification.timestamp,
-            "x-altis-signature": verification.signature,
-          },
+          headers: req.headers,
         });
         sendJson(res, 400, { error: errorMsg });
         return;

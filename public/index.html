@@ -222,8 +222,20 @@
         const slots = await slotsRes.json();
 
         renderStats(stats);
-        renderLogs(logs.deliveries || []);
-        renderSlots(slots.providers || []);
+
+        const deliveries = logs.deliveries || [];
+        const currentDeliveriesSnapshot = JSON.stringify(deliveries);
+        if (currentDeliveriesSnapshot !== lastDeliveriesSnapshot) {
+          renderLogs(deliveries);
+          lastDeliveriesSnapshot = currentDeliveriesSnapshot;
+        }
+
+        const providers = slots.providers || [];
+        const currentSlotsSnapshot = JSON.stringify(providers);
+        if (currentSlotsSnapshot !== lastSlotsSnapshot) {
+          renderSlots(providers);
+          lastSlotsSnapshot = currentSlotsSnapshot;
+        }
       } catch (err) {
         console.error('Failed to fetch data', err);
       } finally {
@@ -242,6 +254,90 @@
       document.getElementById('stat-slots').textContent = stats.totalBookableSlots || 0;
     }
 
+    // Set of open inspect panel IDs so they persist across auto-refreshes
+    const openInspectIds = new Set();
+    let lastDeliveriesSnapshot = '';
+    let lastSlotsSnapshot = '';
+
+    const STANDARD_HEADERS = new Set([
+      'host',
+      'connection',
+      'content-length',
+      'content-type',
+      'user-agent',
+      'accept',
+      'accept-encoding',
+      'x-altis-signature',
+      'x-altis-timestamp',
+      'x-forwarded-for',
+      'x-forwarded-proto',
+      'x-forwarded-port',
+      'x-forwarded-ssl',
+      'x-render-origin-server',
+      'cdn-loop',
+      'transfer-encoding',
+      'cf-ray',
+      'cf-visitor',
+      'cf-connecting-ip'
+    ]);
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function getCustomHeaders(headers) {
+      if (!headers || typeof headers !== 'object') return {};
+      const custom = {};
+      for (const [key, value] of Object.entries(headers)) {
+        if (!STANDARD_HEADERS.has(key.toLowerCase())) {
+          custom[key] = value;
+        }
+      }
+      return custom;
+    }
+
+    function toggleInspect(id) {
+      const panel = document.getElementById(`inspect-panel-${id}`);
+      const btn = document.getElementById(`inspect-btn-${id}`);
+      const wasOpen = openInspectIds.has(id);
+
+      if (wasOpen) {
+        openInspectIds.delete(id);
+        if (panel) panel.classList.add('hidden');
+        if (btn) {
+          btn.innerHTML = '<i class="fa-solid fa-code mr-1"></i>Inspect Payload';
+          btn.classList.remove('text-indigo-300', 'font-semibold');
+        }
+      } else {
+        openInspectIds.add(id);
+        if (panel) panel.classList.remove('hidden');
+        if (btn) {
+          btn.innerHTML = '<i class="fa-solid fa-chevron-up mr-1"></i>Close';
+          btn.classList.add('text-indigo-300', 'font-semibold');
+        }
+      }
+    }
+
+    function copyRaw(event, elementId) {
+      event.stopPropagation();
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      navigator.clipboard.writeText(el.textContent || '').then(() => {
+        const btn = event.currentTarget;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-check text-emerald-400 mr-1"></i>Copied!';
+        setTimeout(() => {
+          btn.innerHTML = originalText;
+        }, 1500);
+      });
+    }
+
     function renderLogs(deliveries) {
       const container = document.getElementById('deliveries-container');
       document.getElementById('log-count').textContent = deliveries.length;
@@ -256,6 +352,15 @@
         return;
       }
 
+      // Preserve scroll positions of open pre blocks
+      const savedScrolls = {};
+      document.querySelectorAll('[data-scroll-id]').forEach(el => {
+        savedScrolls[el.getAttribute('data-scroll-id')] = {
+          top: el.scrollTop,
+          left: el.scrollLeft,
+        };
+      });
+
       container.innerHTML = deliveries
         .map((d, index) => {
           const isSuccess = d.status_code >= 200 && d.status_code < 300;
@@ -269,36 +374,137 @@
           else if (!d.signature_valid) badgeClass = 'bg-rose-500/20 text-rose-400 border border-rose-500/30';
 
           const timeFormatted = new Date(d.received_at).toLocaleTimeString();
+          const recordId = d.id || `delivery-${index}`;
+          const isOpen = openInspectIds.has(recordId);
+
+          const headers = d.headers || {};
+          const customHeaders = getCustomHeaders(headers);
+          const customKeys = Object.keys(customHeaders);
+          const hasCustom = customKeys.length > 0;
+          const totalHeaders = Object.keys(headers).length;
 
           return `
             <div class="bg-slate-900/80 rounded-lg p-3.5 border ${d.signature_valid ? 'border-slate-800' : 'border-rose-500/40'} text-xs">
               <div class="flex items-center justify-between gap-2 mb-2">
                 <div class="flex items-center gap-2">
-                  <span class="font-mono px-2 py-0.5 rounded text-[11px] ${badgeClass}">${d.event}</span>
+                  <span class="font-mono px-2 py-0.5 rounded text-[11px] ${badgeClass}">${escapeHtml(d.event)}</span>
                   ${isDupe ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px]">DUPLICATE</span>' : ''}
                   ${!d.signature_valid ? '<span class="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px]">INVALID SIG</span>' : '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px]">HMAC OK</span>'}
                 </div>
                 <span class="text-slate-500 font-mono">${timeFormatted}</span>
               </div>
 
-              ${d.provider_name ? `<div class="text-slate-300 mb-1 font-medium"><i class="fa-regular fa-user text-slate-500 mr-1.5"></i>${d.provider_name} <span class="text-slate-500 font-normal">(${d.slots_count} slots)</span></div>` : ''}
-              ${d.error ? `<div class="text-rose-400 bg-rose-950/40 p-2 rounded border border-rose-900/50 mb-2 font-mono text-[11px]">${d.error}</div>` : ''}
+              ${d.provider_name ? `<div class="text-slate-300 mb-1 font-medium"><i class="fa-regular fa-user text-slate-500 mr-1.5"></i>${escapeHtml(d.provider_name)} <span class="text-slate-500 font-normal">(${d.slots_count} slots)</span></div>` : ''}
+              ${d.error ? `<div class="text-rose-400 bg-rose-950/40 p-2 rounded border border-rose-900/50 mb-2 font-mono text-[11px]">${escapeHtml(d.error)}</div>` : ''}
+
+              <!-- Headers Summary Bar on Card -->
+              <div class="flex items-center flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-800/60">
+                <span class="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                  <i class="fa-solid fa-sliders text-slate-500"></i> Headers:
+                </span>
+                ${hasCustom ? `
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 truncate" title="Custom headers: ${escapeHtml(customKeys.join(', '))}">
+                    <i class="fa-solid fa-sparkles text-[9px] text-purple-400"></i>
+                    ${customKeys.length} Custom Header${customKeys.length > 1 ? 's' : ''}: 
+                    <strong class="font-bold underline decoration-purple-400/50">${escapeHtml(customKeys.join(', '))}</strong>
+                  </span>
+                ` : `
+                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] text-slate-500 bg-slate-850 font-mono">
+                    ${totalHeaders} total &bull; No custom headers
+                  </span>
+                `}
+              </div>
 
               <div class="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-slate-400">
-                <span class="font-mono text-[11px] text-slate-500">ID: ${d.envelope_id ? d.envelope_id.slice(0, 18) + '...' : 'none'}</span>
-                <button onclick="togglePayload('payload-${index}')" class="text-indigo-400 hover:text-indigo-300 transition-colors">
-                  <i class="fa-solid fa-code mr-1"></i>Inspect Payload
+                <span class="font-mono text-[11px] text-slate-500">ID: ${d.envelope_id ? escapeHtml(d.envelope_id.slice(0, 18)) + '...' : 'none'}</span>
+                <button 
+                  id="inspect-btn-${recordId}"
+                  onclick="toggleInspect('${recordId}')" 
+                  class="text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1.5 ${isOpen ? 'text-indigo-300 font-semibold' : ''}"
+                >
+                  <i class="fa-solid ${isOpen ? 'fa-chevron-up' : 'fa-code'}"></i>
+                  <span>${isOpen ? 'Close' : 'Inspect Payload'}</span>
                 </button>
               </div>
 
-              <div id="payload-${index}" class="hidden mt-3 pt-2 border-t border-slate-800/80">
-                <div class="text-[10px] uppercase text-slate-500 mb-1 font-semibold">Envelope & Data:</div>
-                <pre class="bg-slate-950 p-2.5 rounded border border-slate-800 text-[11px] font-mono text-indigo-200 overflow-x-auto max-h-48">${JSON.stringify(d.payload, null, 2)}</pre>
+              <!-- Expanded Inspection Panel (Headers & Payload) -->
+              <div id="inspect-panel-${recordId}" class="${isOpen ? '' : 'hidden'} mt-3 pt-3 border-t border-slate-800/80 space-y-3">
+                <!-- Custom Headers Highlight Box -->
+                ${hasCustom ? `
+                  <div class="bg-purple-950/40 border border-purple-800/60 rounded-lg p-2.5">
+                    <div class="text-[10px] uppercase font-bold text-purple-300 mb-1.5 flex items-center justify-between">
+                      <span class="flex items-center gap-1.5">
+                        <i class="fa-solid fa-sparkles text-purple-400"></i>
+                        Detected Custom Headers (${customKeys.length}):
+                      </span>
+                      <span class="text-[10px] font-normal text-purple-400/80">Received from webhook</span>
+                    </div>
+                    <div class="space-y-1 font-mono text-[11px]">
+                      ${customKeys.map(k => `
+                        <div class="flex items-start justify-between gap-2 bg-slate-950/70 px-2 py-1 rounded border border-purple-900/50">
+                          <span class="text-purple-300 font-semibold select-all">${escapeHtml(k)}:</span>
+                          <span class="text-purple-100 select-all break-all text-right">${escapeHtml(String(customHeaders[k]))}</span>
+                        </div>
+                      `).join('')}
+                    </div>
+                  </div>
+                ` : `
+                  <div class="bg-slate-950/40 border border-slate-800/70 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-400 flex items-center gap-2">
+                    <i class="fa-solid fa-circle-info text-slate-500"></i>
+                    <span>No custom headers detected (only standard HTTP &amp; signature headers).</span>
+                  </div>
+                `}
+
+                <!-- All Request Headers -->
+                <div>
+                  <div class="flex items-center justify-between text-[10px] uppercase text-slate-400 font-semibold mb-1">
+                    <span class="flex items-center gap-1.5">
+                      <i class="fa-solid fa-sliders text-indigo-400"></i>
+                      All Request Headers (${totalHeaders}):
+                    </span>
+                    <button onclick="copyRaw(event, 'headers-${recordId}')" class="text-indigo-400 hover:text-indigo-300 text-[10px] font-medium lowercase transition-colors flex items-center gap-1">
+                      <i class="fa-regular fa-copy"></i>copy headers
+                    </button>
+                  </div>
+                  <pre id="headers-${recordId}" data-scroll-id="headers-${recordId}" class="bg-slate-950 p-2.5 rounded border border-slate-800 text-[11px] font-mono text-emerald-300 overflow-x-auto max-h-48 whitespace-pre">${escapeHtml(JSON.stringify(headers, null, 2))}</pre>
+                </div>
+
+                <!-- Webhook Payload -->
+                <div>
+                  <div class="flex items-center justify-between text-[10px] uppercase text-slate-400 font-semibold mb-1">
+                    <span class="flex items-center gap-1.5">
+                      <i class="fa-solid fa-cube text-indigo-400"></i>
+                      Envelope &amp; Payload:
+                    </span>
+                    <button onclick="copyRaw(event, 'payload-${recordId}')" class="text-indigo-400 hover:text-indigo-300 text-[10px] font-medium lowercase transition-colors flex items-center gap-1">
+                      <i class="fa-regular fa-copy"></i>copy payload
+                    </button>
+                  </div>
+                  <pre id="payload-${recordId}" data-scroll-id="payload-${recordId}" class="bg-slate-950 p-2.5 rounded border border-slate-800 text-[11px] font-mono text-indigo-200 overflow-x-auto max-h-80 whitespace-pre">${escapeHtml(JSON.stringify(d.payload, null, 2))}</pre>
+                </div>
+
+                <!-- Panel Footer with Close Button -->
+                <div class="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
+                  <span class="text-slate-500 font-mono text-[10px]">Scroll payload above &bull; Click close when done</span>
+                  <button onclick="toggleInspect('${recordId}')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all flex items-center gap-1.5">
+                    <i class="fa-solid fa-xmark"></i>
+                    <span>Close</span>
+                  </button>
+                </div>
               </div>
             </div>
           `;
         })
         .join('');
+
+      // Restore scroll positions of open pre blocks
+      for (const [id, pos] of Object.entries(savedScrolls)) {
+        const el = document.getElementById(id);
+        if (el) {
+          el.scrollTop = pos.top;
+          el.scrollLeft = pos.left;
+        }
+      }
     }
 
     function renderSlots(providers) {
@@ -388,14 +594,12 @@
         .join('');
     }
 
-    function togglePayload(id) {
-      const el = document.getElementById(id);
-      if (el) el.classList.toggle('hidden');
-    }
-
     async function resetData() {
       if (confirm('Clear all received webhook records and active slot catalog?')) {
         await fetch('/api/reset', { method: 'POST' });
+        openInspectIds.clear();
+        lastDeliveriesSnapshot = '';
+        lastSlotsSnapshot = '';
         fetchData();
       }
     }
